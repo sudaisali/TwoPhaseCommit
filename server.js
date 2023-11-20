@@ -1,45 +1,120 @@
-const express = require('express');
 const mongoose = require('mongoose');
-const Product = require('./models/products'); 
-const app = express();
+const Account = require('./models/accounts')
+const Transaction = require('./models/transaction')
 
-mongoose.connect('mongodb://localhost:27017/account').then(() => {
-  console.log("Database is Connected");
-  app.listen(3000, () => {
-    console.log("Server is starting");
-  });
-}).catch(error => console.log(error));
+// Connect to MongoDB
+mongoose.connect('mongodb://0.0.0.0:27017/testdb');
 
-async function manageTransaction() {
-  const session = await Product.startSession();
 
-  try {
-    await session.withTransaction(async () => {
-      const productId = "6558ef52477e00ca3b4f3922";
-      const quantityToReduce = 1;
+const performTransaction = async () => {
 
-      const prod = await Product.findOne({ _id: productId }).session(session);
+    try {
 
-      if (!prod) {
-        throw new Error('Product not found');
-      }
+        //save talha and usama data
+        const talhaAccount = await Account({
+            name: 'Talha',
+            balance: 500,
+            pendingTransactions: []
+        }).save()
+        const usamaAccount = await Account({
+            name: 'Usama',
+            balance: 500,
+            pendingTransactions: []
+        }).save()
 
-      if (prod.quantity < quantityToReduce) {
-        throw new Error('Insufficient quantity');
-      }
+        //set Transaction State to initial
+        const transaction = await Transaction({
+            source: 'Talha',
+            destination: 'Usama',
+            value: 100,
+            state: 'initial'
+        }).save()
 
-      await Product.updateOne(
-        { _id: productId },
-        { $inc: { quantity: -quantityToReduce, totalSales: quantityToReduce } }
-      );
-    });
 
-    
-    await session.commitTransaction();
-  } finally {
-    
-    await session.endSession();
-  }
+        //switch transaction state to pending
+        const updateTransaction = await Transaction.findOneAndUpdate(
+            { _id: transaction._id, state: 'initial' },
+            { $set: { state: 'pending' } })
+
+
+        //make transaction
+
+        await Account.updateOne(
+            {
+                name: updateTransaction.source,
+                pendingTransactions: {
+                    $ne: updateTransaction._id
+                }
+
+            },
+            {
+                $inc: {
+                    balance: -updateTransaction.value,
+                },
+                $push: {
+                    pendingTransactions: updateTransaction._id
+                }
+            }
+        )
+        await Account.updateOne(
+            {
+                name: updateTransaction.destination,
+                pendingTransactions: {
+                    $ne: updateTransaction._id
+                }
+
+            },
+            {
+                $inc: {
+                    balance: updateTransaction.value,
+                },
+                $push: {
+                    pendingTransactions: updateTransaction._id
+                }
+            }
+        )
+
+        //change transaction state to commited
+        await Transaction.updateOne(
+            {
+                _id: updateTransaction._id
+            },
+            {
+                $set:
+                {
+                    state: 'committed'
+                }
+            }
+        );
+        //remove  pending transactions
+        await Account.updateOne(
+            { name: updateTransaction.source },
+            {
+                $pull: {
+                    pendingTransactions: updateTransaction._id
+                }
+            }
+        )
+        await Account.updateOne(
+            { name: updateTransaction.destination },
+            {
+                $pull: {
+                    pendingTransactions: updateTransaction._id
+                }
+            }
+        )
+
+        // Step 7: Set Transaction State to Done
+        await Transaction.updateOne(
+            { _id: updateTransaction._id },
+            { $set: { state: 'done' } });
+
+        console.log('Transaction successful!');
+    } catch (error) {
+        console.log(error)
+    }
+
 }
 
-manageTransaction();
+
+performTransaction()
